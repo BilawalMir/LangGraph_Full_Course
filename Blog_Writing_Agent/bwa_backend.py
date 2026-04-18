@@ -31,9 +31,11 @@ load_dotenv()
 class Task(BaseModel):
     id: int
     title: str
-    goal: str = Field(..., description="One sentence describing what the reader should do/understand.")
+    goal: str = Field(
+        ..., description="One sentence describing what the reader should do/understand."
+    )
     bullets: List[str] = Field(..., min_length=3, max_length=6)
-    target_words: int = Field(..., description="Target words (120–550).")
+    target_words: int = Field(..., description="Target words (120-550).")
 
     tags: List[str] = Field(default_factory=list)
     requires_research: bool = False
@@ -45,7 +47,9 @@ class Plan(BaseModel):
     blog_title: str
     audience: str
     tone: str
-    blog_kind: Literal["explainer", "tutorial", "news_roundup", "comparison", "system_design"] = "explainer"
+    blog_kind: Literal[
+        "explainer", "tutorial", "news_roundup", "comparison", "system_design"
+    ] = "explainer"
     constraints: List[str] = Field(default_factory=list)
     tasks: List[Task]
 
@@ -84,6 +88,7 @@ class ImageSpec(BaseModel):
 class GlobalImagePlan(BaseModel):
     md_with_placeholders: str
     images: List[ImageSpec] = Field(default_factory=list)
+
 
 class State(TypedDict):
     topic: str
@@ -128,16 +133,19 @@ Modes:
 - open_book (needs_research=true): volatile weekly/news/"latest"/pricing/policy.
 
 If needs_research=true:
-- Output 3–10 high-signal, scoped queries.
+- Output 3-10 high-signal, scoped queries.
 - For open_book weekly roundup, include queries reflecting last 7 days.
 """
+
 
 def router_node(state: State) -> dict:
     decider = llm.with_structured_output(RouterDecision)
     decision = decider.invoke(
         [
             SystemMessage(content=ROUTER_SYSTEM),
-            HumanMessage(content=f"Topic: {state['topic']}\nAs-of date: {state['as_of']}"),
+            HumanMessage(
+                content=f"Topic: {state['topic']}\nAs-of date: {state['as_of']}"
+            ),
         ]
     )
 
@@ -155,8 +163,10 @@ def router_node(state: State) -> dict:
         "recency_days": recency_days,
     }
 
+
 def route_next(state: State) -> str:
     return "research" if state["needs_research"] else "orchestrator"
+
 
 # -----------------------------
 # 4) Research (Tavily)
@@ -166,6 +176,7 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
         return []
     try:
         from langchain_community.tools.tavily_search import TavilySearchResults  # type: ignore
+
         tool = TavilySearchResults(max_results=max_results)
         results = tool.invoke({"query": query})
         out: List[dict] = []
@@ -183,6 +194,7 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
     except Exception:
         return []
 
+
 def _iso_to_date(s: Optional[str]) -> Optional[date]:
     if not s:
         return None
@@ -190,6 +202,7 @@ def _iso_to_date(s: Optional[str]) -> Optional[date]:
         return date.fromisoformat(s[:10])
     except Exception:
         return None
+
 
 RESEARCH_SYSTEM = """You are a research synthesizer.
 
@@ -202,6 +215,7 @@ Rules:
 - Keep snippets short.
 - Deduplicate by URL.
 """
+
 
 def research_node(state: State) -> dict:
     queries = (state.get("queries") or [])[:10]
@@ -235,9 +249,12 @@ def research_node(state: State) -> dict:
     if state.get("mode") == "open_book":
         as_of = date.fromisoformat(state["as_of"])
         cutoff = as_of - timedelta(days=int(state["recency_days"]))
-        evidence = [e for e in evidence if (d := _iso_to_date(e.published_at)) and d >= cutoff]
+        evidence = [
+            e for e in evidence if (d := _iso_to_date(e.published_at)) and d >= cutoff
+        ]
 
     return {"evidence": evidence}
+
 
 # -----------------------------
 # 5) Orchestrator (Plan)
@@ -246,7 +263,7 @@ ORCH_SYSTEM = """You are a senior technical writer and developer advocate.
 Produce a highly actionable outline for a technical blog post.
 
 Requirements:
-- 5–9 tasks, each with goal + 3–6 bullets + target_words.
+- 5-9 tasks, each with goal + 3-6 bullets + target_words.
 - Tags are flexible; do not force a fixed taxonomy.
 
 Grounding:
@@ -255,10 +272,11 @@ Grounding:
 - open_book: weekly/news roundup:
   - Set blog_kind="news_roundup"
   - No tutorial content unless requested
-  - If evidence is weak, plan should explicitly reflect that (don’t invent events).
+  - If evidence is weak, plan should explicitly reflect that (don't invent events).
 
 Output must match Plan schema.
 """
+
 
 def orchestrator_node(state: State) -> dict:
     planner = llm.with_structured_output(Plan)
@@ -308,6 +326,7 @@ def fanout(state: State):
         for task in state["plan"].tasks
     ]
 
+
 # -----------------------------
 # 7) Worker
 # -----------------------------
@@ -332,6 +351,7 @@ Grounding:
 Code:
 - If requires_code==true, include at least one minimal snippet.
 """
+
 
 def worker_node(payload: dict) -> dict:
     task = Task(**payload["task"])
@@ -373,6 +393,7 @@ def worker_node(payload: dict) -> dict:
 
     return {"sections": [(task.id, section_md)]}
 
+
 # ============================================================
 # 8) ReducerWithImages (subgraph)
 #    merge_content -> decide_images -> generate_and_place_images
@@ -398,6 +419,7 @@ Rules:
 - Avoid decorative images; prefer technical diagrams with short labels.
 Return strictly GlobalImagePlan.
 """
+
 
 def decide_images(state: State) -> dict:
     planner = llm.with_structured_output(GlobalImagePlan)
@@ -524,6 +546,7 @@ def generate_and_place_images(state: State) -> dict:
     Path(filename).write_text(md, encoding="utf-8")
     return {"final": md}
 
+
 # build reducer subgraph
 reducer_graph = StateGraph(State)
 reducer_graph.add_node("merge_content", merge_content)
@@ -546,7 +569,9 @@ g.add_node("worker", worker_node)
 g.add_node("reducer", reducer_subgraph)
 
 g.add_edge(START, "router")
-g.add_conditional_edges("router", route_next, {"research": "research", "orchestrator": "orchestrator"})
+g.add_conditional_edges(
+    "router", route_next, {"research": "research", "orchestrator": "orchestrator"}
+)
 g.add_edge("research", "orchestrator")
 
 g.add_conditional_edges("orchestrator", fanout, ["worker"])
@@ -555,4 +580,3 @@ g.add_edge("reducer", END)
 
 app = g.compile()
 app
-
